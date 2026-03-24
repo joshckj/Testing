@@ -4,3 +4,5 @@ df = pd.read_csv("testing.csv")
 
 df.columns
 df.rows
+
+print("hello world")
