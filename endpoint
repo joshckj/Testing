@@ -1,7 +1,0 @@
-curl https://litellm.ga.inspdigital.sg/v1/chat/completions \
-  -H "Authorization: Bearer sk-677s9TsQeLwaZF1W_8dfyg" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "your-model-name",
-    "messages": [{"role": "user", "content": "hello"}]
-  }'
