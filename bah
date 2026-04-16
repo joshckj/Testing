@@ -1,0 +1,78 @@
+#!/bin/bash
+# =============================================================================
+# db.sh — Quick access to PostgreSQL database
+# =============================================================================
+# Usage:
+#   ./db.sh              → opens interactive psql shell
+#   ./db.sh tables       → list all tables
+#   ./db.sh count        → show row counts for all tables
+#   ./db.sh leaks        → show first 10 rows from gas_leak
+#   ./db.sh pipes        → show first 10 rows from pipe_data
+#   ./db.sh predictions  → show latest predictions from prediction_log
+#   ./db.sh wipe         → DANGER: drop all tables
+# =============================================================================
+
+CONTAINER="postgres"
+USER="gasleakuser"
+DB="gasleakdb"
+
+COMMAND=${1:-shell}
+
+case $COMMAND in
+  shell)
+    echo "Opening psql shell..."
+    docker exec -it $CONTAINER psql -U $USER -d $DB
+    ;;
+
+  tables)
+    echo "Listing all tables..."
+    docker exec -it $CONTAINER psql -U $USER -d $DB -c "\dt"
+    ;;
+
+  count)
+    echo "Row counts..."
+    docker exec -it $CONTAINER psql -U $USER -d $DB -c "
+      SELECT 'gas_leak' AS table_name, COUNT(*) FROM gas_leak
+      UNION ALL
+      SELECT 'pipe_data' AS table_name, COUNT(*) FROM pipe_data
+      UNION ALL
+      SELECT 'prediction_log' AS table_name, COUNT(*) FROM prediction_log;
+    "
+    ;;
+
+  leaks)
+    echo "First 10 gas_leak rows..."
+    docker exec -it $CONTAINER psql -U $USER -d $DB -c "SELECT * FROM gas_leak LIMIT 10;"
+    ;;
+
+  pipes)
+    echo "First 10 pipe_data rows..."
+    docker exec -it $CONTAINER psql -U $USER -d $DB -c "SELECT * FROM pipe_data LIMIT 10;"
+    ;;
+
+  predictions)
+    echo "Latest 10 predictions..."
+    docker exec -it $CONTAINER psql -U $USER -d $DB -c "SELECT * FROM prediction_log ORDER BY id DESC LIMIT 10;"
+    ;;
+
+  wipe)
+    echo "WARNING: This will DROP all tables!"
+    read -p "Are you sure? (yes/no): " confirm
+    if [ "$confirm" = "yes" ]; then
+      docker exec -it $CONTAINER psql -U $USER -d $DB -c "
+        DROP TABLE IF EXISTS gas_leak CASCADE;
+        DROP TABLE IF EXISTS pipe_data CASCADE;
+        DROP TABLE IF EXISTS prediction_log CASCADE;
+      "
+      echo "All tables dropped."
+    else
+      echo "Cancelled."
+    fi
+    ;;
+
+  *)
+    echo "Unknown command: $COMMAND"
+    echo "Usage: ./db.sh [shell|tables|count|leaks|pipes|predictions|wipe]"
+    exit 1
+    ;;
+esac
