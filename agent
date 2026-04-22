@@ -1,765 +1,317 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Gas Leak Agent — SP Digital</title>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #231c19;
-    --surface: #2d2420;
-    --border: #423630;
-    --accent: #d4a373;
-    --accent-dim: rgba(212, 163, 115, 0.1);
-    --accent-mid: rgba(212, 163, 115, 0.3);
-    --text: #f0e9e4;
-    --text-dim: #9e8e86;
-    --text-mid: #c7b8b0;
-    --danger: #e06666;
-    --warning: #e6b065;
-    --user-bg: #3b302a;
-    --agent-bg: #28201c;
-  }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Syne', sans-serif;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  /* Header */
-  header {
-    padding: 16px 28px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: var(--surface);
-    flex-shrink: 0;
-  }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .logo-icon {
-    width: 32px;
-    height: 32px;
-    background: var(--accent);
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .logo-icon svg { width: 18px; height: 18px; }
-
-  .logo-text {
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-
-  .logo-sub {
-    font-size: 11px;
-    color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 300;
-    letter-spacing: 0.08em;
-  }
-
-  .status-pill {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--accent-dim);
-    border: 1px solid var(--accent-mid);
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-size: 11px;
-    font-family: 'JetBrains Mono', monospace;
-    color: var(--accent);
-    letter-spacing: 0.05em;
-  }
-
-  .status-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    animation: pulse 2s infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
-  /* Chat area */
-  .chat-container {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px 0;
-    scroll-behavior: smooth;
-  }
-
-  .chat-container::-webkit-scrollbar { width: 4px; }
-  .chat-container::-webkit-scrollbar-track { background: transparent; }
-  .chat-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .message-wrapper {
-    max-width: 780px;
-    margin: 0 auto;
-    padding: 0 24px;
-    animation: fadeUp 0.3s ease;
-  }
-
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  .message {
-    margin-bottom: 24px;
-  }
-
-  .message-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-  }
-
-  .avatar {
-    width: 26px;
-    height: 26px;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: 600;
-    flex-shrink: 0;
-    font-family: 'JetBrains Mono', monospace;
-  }
-
-  .avatar.agent {
-    background: var(--accent-dim);
-    border: 1px solid var(--accent-mid);
-    color: var(--accent);
-  }
-
-  .avatar.user {
-    background: #362a24;
-    border: 1px solid #4a3b33;
-    color: var(--text-mid);
-  }
-
-  .sender-name {
-    font-size: 11px;
-    font-family: 'JetBrains Mono', monospace;
-    color: var(--text-dim);
-    letter-spacing: 0.06em;
-  }
-
-  .message-bubble {
-    padding: 14px 18px;
-    border-radius: 12px;
-    font-size: 14px;
-    line-height: 1.7;
-    border: 1px solid transparent;
-  }
-
-  .message-bubble.agent {
-    background: var(--agent-bg);
-    border-color: var(--border);
-    color: var(--text);
-    margin-right: 40px;
-  }
-
-  .message-bubble.user {
-    background: var(--user-bg);
-    border-color: var(--border);
-    color: var(--text-mid);
-    margin-left: 40px;
-  }
-
-  /* Map iframe */
-  .map-container {
-    margin-top: 16px;
-    border-radius: 12px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    height: 400px;
-  }
-
-  .map-container iframe {
-    width: 100%;
-    height: 100%;
-    border: none;
-  }
-
-  /* CSV download button */
-  .download-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 12px;
-    padding: 8px 16px;
-    background: var(--accent-dim);
-    border: 1px solid var(--accent-mid);
-    border-radius: 8px;
-    color: var(--accent);
-    font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
-    cursor: pointer;
-    transition: all 0.2s;
-    letter-spacing: 0.04em;
-  }
-
-  .download-btn:hover {
-    background: var(--accent-mid);
-  }
-
-  /* Typing indicator */
-  .typing {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 14px 18px;
-    background: var(--agent-bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    margin-right: 40px;
-    width: fit-content;
-  }
-
-  .typing span {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    animation: typing 1.2s infinite;
-  }
-
-  .typing span:nth-child(2) { animation-delay: 0.2s; }
-  .typing span:nth-child(3) { animation-delay: 0.4s; }
-
-  @keyframes typing {
-    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-    30%           { transform: translateY(-4px); opacity: 1; }
-  }
-
-  /* Welcome screen */
-  .welcome {
-    max-width: 780px;
-    margin: 40px auto 0;
-    padding: 0 24px;
-  }
-
-  .welcome-title {
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin-bottom: 8px;
-  }
-
-  .welcome-title span { color: var(--accent); }
-
-  .welcome-sub {
-    font-size: 14px;
-    color: var(--text-dim);
-    margin-bottom: 16px;
-    line-height: 1.6;
-  }
-
-  /* Input area */
-  .input-area {
-    border-top: 1px solid var(--border);
-    background: var(--surface);
-    padding: 16px 24px;
-    flex-shrink: 0;
-  }
-
-  .input-inner {
-    max-width: 780px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .file-upload-area {
-    display: none;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
-    background: var(--bg);
-    border: 1px dashed var(--border);
-    border-radius: 8px;
-    font-size: 12px;
-    color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
-  }
-
-  .file-upload-area.visible { display: flex; }
-
-  .file-upload-area.has-file {
-    border-color: var(--accent-mid);
-    color: var(--accent);
-    background: var(--accent-dim);
-  }
-
-  .file-input { display: none; }
-
-  .file-btn {
-    padding: 4px 10px;
-    background: var(--border);
-    border: none;
-    border-radius: 4px;
-    color: var(--text-mid);
-    font-size: 11px;
-    font-family: 'JetBrains Mono', monospace;
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
-  }
-
-  .file-btn:hover { background: #4a3c35; color: var(--text); }
-
-  .input-row {
-    display: flex;
-    gap: 10px;
-    align-items: flex-end;
-  }
-
-  textarea {
-    flex: 1;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 16px;
-    color: var(--text);
-    font-family: 'Syne', sans-serif;
-    font-size: 14px;
-    resize: none;
-    outline: none;
-    min-height: 44px;
-    max-height: 120px;
-    line-height: 1.5;
-    transition: border-color 0.2s;
-  }
-
-  textarea:focus { border-color: var(--accent-mid); }
-  textarea::placeholder { color: var(--text-dim); }
-
-  .send-btn {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
-    background: var(--accent);
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-    flex-shrink: 0;
-  }
-
-  .send-btn:hover { background: #c39262; transform: scale(1.05); }
-  .send-btn:active { transform: scale(0.97); }
-  .send-btn:disabled { background: var(--border); cursor: not-allowed; transform: none; }
-
-  .send-btn svg { width: 18px; height: 18px; }
-
-  .attach-btn {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-    flex-shrink: 0;
-    color: var(--text-dim);
-  }
-
-  .attach-btn:hover { border-color: var(--accent-mid); color: var(--accent); }
-  .attach-btn svg { width: 18px; height: 18px; }
-
-  .input-hint {
-    font-size: 11px;
-    color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
-    text-align: center;
-    letter-spacing: 0.04em;
-  }
-
-  /* Error message */
-  .error-bubble {
-    padding: 10px 14px;
-    background: #2b1c1a;
-    border: 1px solid #4a2824;
-    border-radius: 8px;
-    color: var(--danger);
-    font-size: 13px;
-    font-family: 'JetBrains Mono', monospace;
-    margin-top: 8px;
-  }
-</style>
-</head>
-<body>
-
-<!-- Header -->
-<header>
-  <div class="logo">
-    <div class="logo-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2.5" stroke-linecap="round">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
-        <path d="M12 6v6l4 2"/>
-      </svg>
-    </div>
-    <div>
-      <div class="logo-text">Gas Leak Agent</div>
-      <div class="logo-sub">SP DIGITAL · SINGAPORE</div>
-    </div>
-  </div>
-  <div class="status-pill">
-    <div class="status-dot"></div>
-    ONLINE
-  </div>
-</header>
-
-<!-- Chat area -->
-<div class="chat-container" id="chatContainer">
-
-  <!-- Welcome screen -->
-  <div class="welcome" id="welcomeScreen">
-    <div class="welcome-title">Hello. I'm your<br><span>Gas Leak Analyst.</span></div>
-    <div class="welcome-sub">
-      Upload a 6-month DMIS CSV to predict gas leak risk across Singapore's pipe network.
-      I'll generate an interactive hex map and risk breakdown.
-    </div>
-  </div>
-
-  <!-- Messages will appear here -->
-  <div id="messages"></div>
-
-</div>
-
-<!-- Input area -->
-<div class="input-area">
-  <div class="input-inner">
-
-    <!-- File upload row -->
-    <div class="file-upload-area" id="fileUploadArea">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-      </svg>
-      <span id="fileLabel">No file selected — click to attach CSV</span>
-      <button class="file-btn" onclick="document.getElementById('fileInput').click()">Browse</button>
-      <button class="file-btn" onclick="clearFile()" style="display:none" id="clearFileBtn">Remove</button>
-      <input type="file" id="fileInput" class="file-input" accept=".csv" onchange="handleFile(this)">
-    </div>
-
-    <div class="input-row">
-      <button class="attach-btn" onclick="toggleFileUpload()" title="Attach CSV file">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-        </svg>
-      </button>
-      <textarea
-        id="messageInput"
-        placeholder="Type a message..."
-        rows="1"
-        onkeydown="handleKey(event)"
-        oninput="autoResize(this)"
-      ></textarea>
-      <button class="send-btn" id="sendBtn" onclick="sendMessage()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2.5" stroke-linecap="round">
-          <path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/>
-        </svg>
-      </button>
-    </div>
-
-    <div class="input-hint">GASLEAKAGENT v3 · localhost:8000</div>
-  </div>
-</div>
-
-<script>
-  // ── Config ──────────────────────────────────────────────────────────────────
-  const API_URL      = "/api/v1/chat";
-  let   chatHistory  = [];
-  let   selectedFile = null;
-  let   isLoading    = false;
-
-  // ── File handling ────────────────────────────────────────────────────────────
-  function toggleFileUpload() {
-    const area = document.getElementById("fileUploadArea");
-    area.classList.toggle("visible");
-  }
-
-  function handleFile(input) {
-    if (input.files && input.files[0]) {
-      selectedFile = input.files[0];
-      const area  = document.getElementById("fileUploadArea");
-      const label = document.getElementById("fileLabel");
-      const clear = document.getElementById("clearFileBtn");
-      label.textContent = selectedFile.name;
-      area.classList.add("has-file");
-      clear.style.display = "block";
-    }
-  }
-
-  function clearFile() {
-    selectedFile = null;
-    document.getElementById("fileInput").value = "";
-    document.getElementById("fileLabel").textContent = "No file selected — click to attach CSV";
-    document.getElementById("fileUploadArea").classList.remove("has-file");
-    document.getElementById("clearFileBtn").style.display = "none";
-  }
-
-  // ── Auto resize textarea ─────────────────────────────────────────────────────
-  function autoResize(el) {
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 120) + "px";
-  }
-
-  // ── Key handler ──────────────────────────────────────────────────────────────
-  function handleKey(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }
-
-  // ── Suggestions ──────────────────────────────────────────────────────────────
-  function sendSuggestion(text) {
-    document.getElementById("messageInput").value = text;
-    sendMessage();
-  }
-
-  // ── Send message ─────────────────────────────────────────────────────────────
-  async function sendMessage() {
-    const input = document.getElementById("messageInput");
-    const text  = input.value.trim();
-    if (!text || isLoading) return;
-
-    // Hide welcome screen
-    document.getElementById("welcomeScreen").style.display = "none";
-
-    // Add user message to UI
-    appendMessage("user", text);
-
-    // Add to history
-    chatHistory.push({ role: "user", content: text });
-
-    // Clear input
-    input.value = "";
-    input.style.height = "auto";
-
-    // Show typing
-    const typingId = showTyping();
-    setLoading(true);
-
-    try {
-      // Build form data
-      const formData = new FormData();
-      formData.append("messages", JSON.stringify(chatHistory));
-      if (selectedFile) {
-        formData.append("file", selectedFile);
-      }
-
-      const response = await fetch(API_URL, {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      removeTyping(typingId);
-
-      if (!response.ok) {
-        appendError(data.detail || "Something went wrong. Please try again.");
-        return;
-      }
-
-      // Add agent message
-      appendMessage("agent", data.message, data.map_html, data.csv_data);
-
-      // Add to history
-      chatHistory.push({ role: "assistant", content: data.message });
-
-      // Show file upload if agent needs a file
-      if (data.requires_file) {
-        document.getElementById("fileUploadArea").classList.add("visible");
-      }
-
-      // Clear file after sending
-      if (selectedFile) clearFile();
-
-    } catch (err) {
-      removeTyping(typingId);
-      appendError(`Cannot reach backend at ${API_URL}. Is gasleakagent running?`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // ── Append message ───────────────────────────────────────────────────────────
-  function appendMessage(role, text, mapHtml = null, csvData = null) {
-    const messages = document.getElementById("messages");
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "message-wrapper";
-
-    const msg = document.createElement("div");
-    msg.className = "message";
-
-    const header = document.createElement("div");
-    header.className = "message-header";
-
-    const avatar = document.createElement("div");
-    avatar.className = `avatar ${role}`;
-    avatar.textContent = role === "agent" ? "GA" : "YOU";
-
-    const name = document.createElement("div");
-    name.className = "sender-name";
-    name.textContent = role === "agent" ? "GAS LEAK AGENT" : "YOU";
-
-    header.appendChild(avatar);
-    header.appendChild(name);
-
-    const bubble = document.createElement("div");
-    bubble.className = `message-bubble ${role}`;
-    bubble.innerHTML = formatText(text);
-
-    msg.appendChild(header);
-    msg.appendChild(bubble);
-
-    // Map
-    if (mapHtml) {
-      const mapContainer = document.createElement("div");
-      mapContainer.className = "map-container";
-      const iframe = document.createElement("iframe");
-      iframe.srcdoc = mapHtml;
-      iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
-      mapContainer.appendChild(iframe);
-      msg.appendChild(mapContainer);
-    }
-
-    // CSV download
-    if (csvData) {
-      const btn = document.createElement("button");
-      btn.className = "download-btn";
-      btn.innerHTML = `
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-        </svg>
-        DOWNLOAD PREDICTION CSV
-      `;
-      btn.onclick = () => downloadCSV(csvData);
-      msg.appendChild(btn);
-    }
-
-    wrapper.appendChild(msg);
-    messages.appendChild(wrapper);
-    scrollToBottom();
-  }
-
-  // ── Append error ─────────────────────────────────────────────────────────────
-  function appendError(text) {
-    const messages = document.getElementById("messages");
-    const wrapper  = document.createElement("div");
-    wrapper.className = "message-wrapper";
-    const err = document.createElement("div");
-    err.className = "error-bubble";
-    err.textContent = `⚠ ${text}`;
-    wrapper.appendChild(err);
-    messages.appendChild(wrapper);
-    scrollToBottom();
-  }
-
-  // ── Typing indicator ─────────────────────────────────────────────────────────
-  function showTyping() {
-    const messages = document.getElementById("messages");
-    const wrapper  = document.createElement("div");
-    const id       = "typing-" + Date.now();
-    wrapper.id     = id;
-    wrapper.className = "message-wrapper";
-
-    const header = document.createElement("div");
-    header.className = "message-header";
-    const avatar = document.createElement("div");
-    avatar.className = "avatar agent";
-    avatar.textContent = "GA";
-    const name = document.createElement("div");
-    name.className = "sender-name";
-    name.textContent = "GAS LEAK AGENT";
-    header.appendChild(avatar);
-    header.appendChild(name);
-
-    const typing = document.createElement("div");
-    typing.className = "typing";
-    typing.innerHTML = "<span></span><span></span><span></span>";
-
-    wrapper.appendChild(header);
-    wrapper.appendChild(typing);
-    messages.appendChild(wrapper);
-    scrollToBottom();
-    return id;
-  }
-
-  function removeTyping(id) {
-    const el = document.getElementById(id);
-    if (el) el.remove();
-  }
-
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-  function formatText(text) {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\n/g, "<br>")
-      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-  }
-
-  function downloadCSV(csvData) {
-    const blob = new Blob([csvData], { type: "text/csv" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `gas_leak_prediction_${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
-  function setLoading(val) {
-    isLoading = val;
-    document.getElementById("sendBtn").disabled = val;
-  }
-
-  function scrollToBottom() {
-    const container = document.getElementById("chatContainer");
-    container.scrollTop = container.scrollHeight;
-  }
-</script>
-</body>
-</html>
+# =============================================================================
+# LANGCHAIN AGENT — gasleakagent/app/gasleakagent/agent.py
+# =============================================================================
+# File bytes are stored on the agent_executor object — never sent to the LLM.
+# LLM only sees "[File attached: filename.csv, size: X bytes]"
+# Tools access file bytes directly from agent_executor.file_bytes
+# =============================================================================
+
+import pandas as pd
+import io
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.tools import tool
+from app.core.llm import llm
+from app.skills.hex_assigner.scripts.main import run_hex_assigner
+from app.skills.validation.scripts.main import run_validation
+from app.skills.analysis_map.main import run_analysis_map
+from app.skills.ingest_newdata.scripts.main import run_ingest_newdata
+from app.utils.models import ChatResponse
+
+_file_store = {
+    "file_bytes": None,
+    "file_name": None,
+    "map_html": None,
+    "csv_data": None,
+}
+
+def _extract_period_from_df(df: pd.DataFrame):
+    if "Call end time" not in df.columns:
+        raise ValueError("Missing 'Call end time' column to determine period.")
+    # Coerce errors to handle empty rows and find the most common date to be resistant to outliers
+    dates = pd.to_datetime(df["Call end time"], errors="coerce", dayfirst=True).dropna()
+    if dates.empty:
+        raise ValueError("Could not parse any valid dates from 'Call end time'.")
+    
+    input_year = str(int(dates.dt.year.mode()[0]))
+    most_common_month = dates.dt.month.mode()[0]
+    input_half = "H1" if most_common_month <= 6 else "H2"
+    
+    return input_half, input_year
+
+# ── Tools ──────────────────────────────────────────────────────────────────────
+
+@tool
+def analysis_map_tool(
+    high_threshold: float = 25.0,
+    medium_threshold: float = 15.0,
+    low_threshold: float = 5.0,
+) -> dict:
+    """
+    Predicts gas leak risk for the NEXT 6 months across Singapore's hex grid.
+
+    Parameters
+    ----------
+    high_threshold   : leaks >= this -> High risk (default 25.0)
+    medium_threshold : leaks >= this -> Medium risk (default 15.0)
+    low_threshold    : leaks >= this -> Low risk (default 5.0)
+
+    Rules
+    -----
+    - Always confirm thresholds before calling.
+    - Thresholds must satisfy: high > medium > low.
+    - File must be attached before calling.
+    """
+    # Read file bytes from agent_executor — not from LLM input
+    file_bytes = _file_store["file_bytes"]
+    file_name = _file_store["file_name"]
+
+    if not file_bytes:
+        return {"message": "Please attach a 6-month DMIS CSV file first."}
+
+    try:
+        df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
+    except UnicodeDecodeError:
+        df = pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
+
+    try:
+        input_half, input_year = _extract_period_from_df(df)
+    except ValueError as e:
+        return {"message": str(e)}
+
+    df = run_hex_assigner(df)
+    df, validation_report = run_validation(df, input_half, input_year)
+    result = run_analysis_map(df, input_half, input_year, high_threshold, medium_threshold, low_threshold)
+    
+    # Pop large outputs out of the dictionary so we don't blow up the LLM token context limit
+    _file_store["map_html"] = result.pop("map_html", None)
+    _file_store["csv_data"] = result.pop("csv_data", None)
+    
+    result["validation_report"] = validation_report
+    return result
+
+
+@tool
+def ingest_newdata_tool() -> str:
+    """
+    Ingests a new DMIS CSV file into PostgreSQL.
+    Automatically removes duplicate DMIR Numbers (within file and vs database).
+    Developer-facing only.
+
+    Rules
+    -----
+    - Always confirm file is attached before calling.
+    - Report back exactly how many records were inserted and how many were duplicates.
+    """
+    # Read file bytes from agent_executor — not from LLM input
+    file_bytes = _file_store["file_bytes"]
+    file_name = _file_store["file_name"]
+
+    if not file_bytes:
+        return "Please attach a DMIS CSV file first."
+
+    try:
+        df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
+    except UnicodeDecodeError:
+        df = pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
+
+    try:
+        input_half, input_year = _extract_period_from_df(df)
+    except ValueError as e:
+        return str(e)
+
+    return run_ingest_newdata(file_bytes, file_name or "uploaded.csv", input_half, input_year)
+
+
+# ── Prompt ────────────────────────────────────────────────────────────────────
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+You are a gas leak prediction assistant for SP Digital's Singapore pipe network.
+You have two tools:
+  1. analysis_map_tool    — predicts gas leak risk for the next 6 months (user-facing)
+  2. ingest_newdata_tool  — ingests new DMIS CSV into the database (developer-facing)
+
+─────────────────────────────────────────────
+WHEN TO USE TOOLS
+─────────────────────────────────────────────
+- Only call tools when the user explicitly requests analysis or data ingestion
+- For general questions, greetings, or explanations — respond conversationally without calling tools
+- If user asks "what can you do?" or "help" — explain capabilities without calling tools
+- If user mentions uploading a file or wants to analyze data — then start the tool workflow
+
+─────────────────────────────────────────────
+ANALYSIS MAP TOOL WORKFLOW
+─────────────────────────────────────────────
+Step 1 — Ask user to upload their 6-month DMIS CSV if not attached.
+Step 2 — Ask for thresholds or offer defaults:
+    "Risk thresholds — defaults are High=25, Medium=15, Low=5.
+     Reply 'use defaults' to proceed."
+Step 3 — Confirm before calling:
+    "I will predict risk for the next 6 months. Proceed?"
+Step 4 — Only call the tool after explicit user confirmation (e.g., 'yes', 'proceed').
+Step 5 — Call tool, return map and summary.
+Step 6 — If validation removed any records, clearly tell the user what was removed.
+
+─────────────────────────────────────────────
+INGEST NEW DATA TOOL WORKFLOW
+─────────────────────────────────────────────
+Step 1 — Ask developer to attach the new DMIS CSV if not attached.
+Step 2 — Confirm before calling.
+Step 3 — Only call the tool after explicit user confirmation.
+Step 4 — Report back: rows inserted, duplicates removed, validation summary.
+
+─────────────────────────────────────────────
+RULES
+─────────────────────────────────────────────
+- Never call any tool without a file attached.
+- The model predicts the NEXT 6 months — always make this clear.
+- Retraining is handled by developers only — do not mention it to users.
+- Only answer questions about gas leak risk analysis and data ingestion.
+- For all other queries, respond as a helpful assistant without using tools.
+"""),
+    MessagesPlaceholder(variable_name="chat_history"),
+    ("human", "{input}"),
+    ("placeholder", "{agent_scratchpad}"),
+])
+
+# ── Conversational Chain ──────────────────────────────────────────────────────
+
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+
+# Simple conversational chain that can mention tools but doesn't force tool usage
+conversational_prompt = PromptTemplate.from_template("""
+You are a gas leak prediction assistant for SP Digital's Singapore pipe network.
+
+CAPABILITIES:
+- Predict gas leak risk for the next 6 months across Singapore's hex grid
+- Ingest new DMIS CSV files into the database (developer feature)
+
+HOW TO USE:
+For risk analysis: Upload a 6-month DMIS CSV file
+For data ingestion: Upload a DMIS CSV file (developer only)
+
+RULES:
+- Always be helpful and informative
+- Only perform actions when explicitly requested
+- Explain what you can do when asked
+- Don't force tool usage - wait for user requests
+
+Current conversation:
+{chat_history}
+
+User: {input}
+
+Assistant:""")
+
+llm_chain = LLMChain(llm=llm, prompt=conversational_prompt)
+
+
+def _build_chat_history(messages: list) -> list:
+    history = []
+    for msg in messages[:-1]:
+        if msg["role"] == "user":
+            history.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "assistant":
+            history.append(AIMessage(content=msg["content"]))
+    return history
+
+
+def run_agent(messages: list, file_bytes: bytes = None, file_name: str = None) -> ChatResponse:
+    try:
+        # Create agent executor
+        tools = [analysis_map_tool, ingest_newdata_tool]
+        agent = create_tool_calling_agent(llm, tools, prompt)
+        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+        
+        last_message = messages[-1]["content"] if messages else ""
+
+        # If a new file is uploaded, update the in-memory store.
+        # This allows the file to persist across requests within a single user session
+        # on a single worker process.
+        if file_bytes and file_name:
+            _file_store["file_bytes"] = file_bytes
+            _file_store["file_name"] = file_name
+        
+        # Reset map and csv stores for this new run
+        _file_store["map_html"] = None
+        _file_store["csv_data"] = None
+
+        # Quick preview bypass (only when user auto-submits a new file directly)
+        if file_bytes and file_name and last_message.strip() == file_name.strip():
+            try:
+                try:
+                    df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
+                except UnicodeDecodeError:
+                    df = pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
+                
+                input_half, input_year = _extract_period_from_df(df)
+                
+                if input_half == "H1":
+                    next_half, next_year = "H2", input_year
+                else:
+                    next_half, next_year = "H1", str(int(input_year) + 1)
+                
+                cols = [c for c in ["DMIR Number", "Call end time", "Nature of Complaints", "Latitude", "Longitude"] if c in df.columns]
+                if not cols:
+                    cols = list(df.columns[:5])
+                    
+                col_widths = {c: len(str(c)) for c in cols}
+                for _, row in df[cols].head(3).iterrows():
+                    for c in cols:
+                        col_widths[c] = max(col_widths[c], len(str(row[c])))
+                        
+                header_str = " | ".join(str(c).ljust(col_widths[c]) for c in cols)
+                sep_str = "-" * len(header_str)
+                rows = [" | ".join(str(row[c]).ljust(col_widths[c]) for c in cols) for _, row in df[cols].head(3).iterrows()]
+                
+                preview_text = "\n".join([header_str, sep_str] + rows)
+                
+                quick_msg = (
+                    f"I have received the file **{file_name}**.\n\n"
+                    f"• **Detected Data Period:** {input_half} {input_year}\n"
+                    f"• **Prediction Target:** {next_half} {next_year} *(The model always predicts for the NEXT 6 months)*\n\n"
+                    f"**Data Preview (First 3 rows):**\n"
+                    f"```text\n{preview_text}\n```\n\n"
+                    f"Would you like to proceed with the analysis using the default risk thresholds (High=25, Medium=15, Low=5)?"
+                )
+                
+                return ChatResponse(message=quick_msg)
+            except Exception:
+                pass # Fallback to normal LLM flow if parsing fails
+
+        if _file_store.get("file_bytes") and _file_store.get("file_name"):
+            input_text = f"{last_message}\n\n[File attached: {_file_store['file_name']}, size: {len(_file_store['file_bytes']):,} bytes]"
+        else:
+            input_text = last_message
+
+        result = agent_executor.invoke({
+            "input": input_text,
+            "chat_history": _build_chat_history(messages),
+        })
+
+        output = result["output"]
+        map_html = _file_store.get("map_html")
+        csv_data = _file_store.get("csv_data")
+
+        if map_html or csv_data:
+            return ChatResponse(
+                message=str(output),
+                map_html=map_html,
+                csv_data=csv_data,
+            )
+
+        if "please attach" in str(output).lower():
+            return ChatResponse(message=output, requires_file=True)
+
+        return ChatResponse(message=str(output))
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return ChatResponse(
+            message=f"Error: {str(e)}",
+            requires_file=False,
+        )
