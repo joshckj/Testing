@@ -24,7 +24,22 @@ _file_store = {
     "csv_data": None,
     "detected_period": None,
     "detected_months": None,
+    "missing_months": None,
 }
+
+def _get_expected_past_6_months():
+    """Calculates the exact 6 months prior to the current date."""
+    now = datetime.datetime.now()
+    expected = []
+    for i in range(1, 7):
+        m = now.month - i
+        y = now.year
+        if m <= 0:
+            m += 12
+            y -= 1
+        dt = datetime.datetime(y, m, 1)
+        expected.append(dt.strftime('%b %Y'))
+    return expected
 
 def _extract_period_from_df(df: pd.DataFrame):
     if "Call end time" not in df.columns:
@@ -48,14 +63,25 @@ def _extract_period_from_df(df: pd.DataFrame):
 
     return input_quarter, input_year
 
-def _extract_months_from_df(df: pd.DataFrame) -> str:
+def _extract_months_from_df(df: pd.DataFrame):
     if "Call end time" not in df.columns:
-        return "Unknown"
+        return "Unknown", "Unknown"
     dates = pd.to_datetime(df["Call end time"], errors="coerce", dayfirst=True).dropna()
     if dates.empty:
-        return "Unknown"
-    months_sorted = dates.dt.to_period('M').unique().sort_values().strftime('%b %Y').tolist()
-    return ", ".join(months_sorted)
+        return "Unknown", "Unknown"
+    
+    found_periods = dates.dt.to_period('M').unique()
+    found_months = [p.strftime('%b %Y') for p in found_periods]
+    
+    expected_months = _get_expected_past_6_months()
+    missing_months = [m for m in expected_months if m not in found_months]
+    
+    found_sorted = sorted(found_months, key=lambda x: datetime.datetime.strptime(x, '%b %Y'))
+    missing_sorted = sorted(missing_months, key=lambda x: datetime.datetime.strptime(x, '%b %Y'))
+    
+    found_str = ", ".join(found_sorted) if found_sorted else "None"
+    missing_str = ", ".join(missing_sorted) if missing_sorted else "None"
+    return found_str, missing_str
 
 # ── Tools ──────────────────────────────────────────────────────────────────────
 
@@ -94,6 +120,8 @@ def gasleakprediction_tool(
         pred_q_int = int(prediction_quarter.upper().replace("Q", ""))
         if pred_year_int < current_year or (pred_year_int == current_year and pred_q_int < current_quarter):
             return {"message": f"Error: You cannot predict past quarters ({prediction_quarter} {prediction_year}). Please specify a current or future quarter (e.g., Q{current_quarter} {current_year} or later)."}
+        if pred_year_int > current_year + 4:
+            return {"message": f"Error: You cannot predict more than 4 years into the future. The maximum allowed year is {current_year + 4}."}
     except ValueError:
         pass
 
@@ -169,11 +197,12 @@ WHEN TO USE TOOLS
 GAS LEAK PREDICTION TOOL WORKFLOW
 ─────────────────────────────────────────────
 Step 1 — Ask which quarter and year they want to PREDICT (e.g. "Q3 2026"). Both are required before proceeding.
-          CRITICAL RULE: Users CANNOT predict previous/past quarters. For example, if it is currently April 2026 (Q2), they cannot predict Q1 2026, Q4 2025, and backwards. If they request a past quarter, politely decline and ask for a current or future quarter.
+          CRITICAL RULE: Users CANNOT predict previous/past quarters, and CANNOT predict > 4 years into the future. If they request an invalid timeframe, politely decline and ask for a valid current or future quarter.
 Step 2 — Ask user to upload a recent DMIS CSV containing the past months of data.
-Step 3 — Check the "Months found" in the attached file.
-          Tell them exactly: "Great, I have checked the data. There are months present [list found months]. Do you still want to continue? The model can still work."
-          Wait for user confirmation before proceeding.
+Step 3 — Check the "Months found" and "Missing expected months" in the attached file.
+          If "Missing expected months" is not "None", tell them exactly: "Great, I have checked the data. There are months present [list found months] but you have some missing months [list missing months]. Do you still want to continue? The model can still work."
+          If "Missing expected months" is "None", say "Great, I have checked the data and all expected months are present. Do you still want to continue? The model can still work."
+          Always wait for user confirmation before calling the tool.
 Step 4 — Ask for thresholds or offer defaults:
     "Risk thresholds — defaults are High=3, Medium=2, Low=1.
      Reply 'use defaults' to proceed."
@@ -214,8 +243,8 @@ For risk analysis: Tell me which quarter and year you want to predict, then uplo
 RULES:
 - Always be helpful and informative
 - Only perform actions when explicitly requested. Do not execute without proper intent.
-- Users cannot predict past quarters. Reject past quarters and ask for current/future ones.
-- When a file is uploaded, tell them exactly: "Great, I have checked the data. There are months present [list found months]. Do you still want to continue? the model can work still".
+- Users cannot predict past quarters or > 4 years into the future. Reject those and ask for valid current/future ones.
+- When a file is uploaded, tell them exactly: "Great, I have checked the data. There are months present [list found months] but you have some missing months [list missing months]. Do you still want to continue? the model can work still".
 - Explain what you can do when asked
 - Don't force tool usage - wait for user requests
 - If do not know what they are saying, predict what they are saying and write it politely and ask do you mean this. 
@@ -264,10 +293,13 @@ def run_agent(messages: list, file_bytes: bytes = None, file_name: str = None) -
                     df_temp = pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
                 iquarter, iyear = _extract_period_from_df(df_temp)
                 _file_store["detected_period"] = f"{iquarter} {iyear}"
-                _file_store["detected_months"] = _extract_months_from_df(df_temp)
+                found_str, missing_str = _extract_months_from_df(df_temp)
+                _file_store["detected_months"] = found_str
+                _file_store["missing_months"] = missing_str
             except Exception:
                 _file_store["detected_period"] = "Unknown"
                 _file_store["detected_months"] = "Unknown"
+                _file_store["missing_months"] = "Unknown"
         
         # Reset map and csv stores for this new run
         _file_store["map_html"] = None
@@ -276,7 +308,8 @@ def run_agent(messages: list, file_bytes: bytes = None, file_name: str = None) -
         if _file_store.get("file_bytes") and _file_store.get("file_name"):
             actual_period = _file_store.get("detected_period", "Unknown")
             detected_months = _file_store.get("detected_months", "Unknown")
-            input_text = f"{last_message}\n\n[File attached: {_file_store['file_name']}, size: {len(_file_store['file_bytes']):,} bytes, Actual data period: {actual_period}, Months found: {detected_months}]"
+            missing_months = _file_store.get("missing_months", "Unknown")
+            input_text = f"{last_message}\n\n[File attached: {_file_store['file_name']}, size: {len(_file_store['file_bytes']):,} bytes, Actual data period: {actual_period}, Months found: {detected_months}, Missing expected months: {missing_months}]"
         else:
             input_text = last_message
 
