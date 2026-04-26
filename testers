@@ -1,227 +1,317 @@
-"""
-=============================================================================
-FOLIUM HEX MAP VISUALISATION
-=============================================================================
-Generates an interactive Folium map visualization using GeoPandas. 
-Overlays Singapore's map with hexagonal grids color-coded by predicted 
-gas leak risk levels (High, Medium, Low, Minimal).
-=============================================================================
-"""
-import io
-import pathlib
-import geopandas as gpd
-import folium
+# =============================================================================
+# LANGCHAIN AGENT
+# =============================================================================
+# Core conversational agent powered by GPT-4.1. Manages user intents, handles 
+# file context, and coordinates execution of predictive tools based on user input.
+# =============================================================================
+
 import pandas as pd
+import io
+import datetime
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.tools import tool
+from app.core.llm import llm
+from app.skills.gasleakprediction.main import gasleakprediction
+from app.skills.ingest_newdata.scripts.main import run_ingest_newdata
+from app.utils.models import ChatResponse
 
-_ASSETS = pathlib.Path(__file__).parent.parent / "assets"
+_file_store = {
+    "file_bytes": None,
+    "file_name": None,
+    "map_html": None,
+    "csv_data": None,
+    "detected_period": None,
+    "detected_months": None,
+}
 
-def create_hex_map_visualization(prediction_results_df, prediction_quarter, prediction_year):
+def _extract_period_from_df(df: pd.DataFrame):
+    if "Call end time" not in df.columns:
+        raise ValueError("Missing 'Call end time' column to determine period.")
+    # Coerce errors to handle empty rows and find the most common date to be resistant to outliers
+    dates = pd.to_datetime(df["Call end time"], errors="coerce", dayfirst=True).dropna()
+    if dates.empty:
+        raise ValueError("Could not parse any valid dates from 'Call end time'.")
+
+    input_year = str(int(dates.dt.year.mode()[0]))
+    most_common_month = dates.dt.month.mode()[0]
+
+    if most_common_month <= 3:
+        input_quarter = "Q1"
+    elif most_common_month <= 6:
+        input_quarter = "Q2"
+    elif most_common_month <= 9:
+        input_quarter = "Q3"
+    else:
+        input_quarter = "Q4"
+
+    return input_quarter, input_year
+
+def _extract_months_from_df(df: pd.DataFrame) -> str:
+    if "Call end time" not in df.columns:
+        return "Unknown"
+    dates = pd.to_datetime(df["Call end time"], errors="coerce", dayfirst=True).dropna()
+    if dates.empty:
+        return "Unknown"
+    months_sorted = dates.dt.to_period('M').unique().sort_values().strftime('%b %Y').tolist()
+    return ", ".join(months_sorted)
+
+# ── Tools ──────────────────────────────────────────────────────────────────────
+
+@tool
+def gasleakprediction_tool(
+    prediction_quarter: str,
+    prediction_year: str,
+    high_threshold: float = 3.0,
+    medium_threshold: float = 2.0,
+    low_threshold: float = 1.0,
+) -> dict:
     """
-    Creates a Folium Hex Map Visualization based on prediction results
+    Predicts gas leak risk for the specified quarter/year across Singapore's hex grid.
+    Requires a 6-month DMIS CSV covering the historical period before prediction_quarter.
+
+    Parameters
+    ----------
+    prediction_quarter : "Q1", "Q2", "Q3", or "Q4" — the quarter to predict
+    prediction_year    : 4-digit year string, e.g. "2026"
+    high_threshold     : leaks >= this -> High risk (default 3.0)
+    medium_threshold   : leaks >= this -> Medium risk (default 2.0)
+    low_threshold      : leaks >= this -> Low risk (default 1.0)
+
+    Rules
+    -----
+    - Always confirm prediction_quarter and prediction_year with the user before calling.
+    - Thresholds must satisfy: high > medium > low.
+    - File must be attached before calling.
     """
-
-    # Load shapefile
-    gdf = gpd.read_file(_ASSETS / "hexagon_data" / "Singapore_hexagon.shp")
-
-    # Convert CRS if needed
-    if gdf.crs and gdf.crs.to_epsg() != 4326:
-        gdf = gdf.to_crs(epsg=4326)
-
-    # Fix datetime fields
-    for col in gdf.columns:
-        if pd.api.types.is_datetime64_any_dtype(gdf[col]):
-            gdf[col] = gdf[col].astype(str)
-
-    mapsheet = gpd.read_file(_ASSETS / "mapsheet_data" / "Mapsheet.shp")
-    if mapsheet.crs and mapsheet.crs.to_epsg() != 4326:
-        mapsheet = mapsheet.to_crs(epsg=4326)
+    now = datetime.datetime.now()
+    current_year = now.year
+    current_quarter = (now.month - 1) // 3 + 1
     
-    for col in mapsheet.columns:
-        if pd.api.types.is_datetime64_any_dtype(mapsheet[col]):
-            mapsheet[col] = mapsheet[col].astype(str)
+    try:
+        pred_year_int = int(prediction_year)
+        pred_q_int = int(prediction_quarter.upper().replace("Q", ""))
+        if pred_year_int < current_year or (pred_year_int == current_year and pred_q_int < current_quarter):
+            return {"message": f"Error: You cannot predict past quarters ({prediction_quarter} {prediction_year}). Please specify a current or future quarter (e.g., Q{current_quarter} {current_year} or later)."}
+    except ValueError:
+        pass
 
-    prediction_results_df.rename(columns={"HexID": "hexagonID"}, inplace=True)
-    high_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "High", "hexagonID"].astype(str).unique()
-    medium_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "Medium", "hexagonID"].astype(str).unique()
-    low_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "Low", "hexagonID"].astype(str).unique()
-    minimal_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "Minimal", "hexagonID"].astype(str).unique()
+    file_bytes = _file_store["file_bytes"]
+    file_name = _file_store["file_name"]
 
-    if len(high_risk_ids) == 0:
-        print("No high-risk IDs found — skipping high-risk layer")
-        gdf_high_risk = gdf.iloc[0:0]  # empty GeoDataFrame with same structure
-    else:
-        gdf_high_risk = gdf[gdf["hexagonID"].astype(str).isin(high_risk_ids)]
+    if not file_bytes:
+        return {"message": "Please attach a 6-month DMIS CSV file first."}
 
-    if len(medium_risk_ids) == 0:
-        print("No medium-risk IDs found — skipping medium-risk layer")
-        gdf_medium_risk = gdf.iloc[0:0]
-    else:
-        gdf_medium_risk = gdf[gdf["hexagonID"].astype(str).isin(medium_risk_ids)]
+    tmp_path = f"/tmp/{file_name or 'uploaded.csv'}"
+    with open(tmp_path, "wb") as f:
+        f.write(file_bytes)
+
+    result = gasleakprediction(tmp_path, prediction_quarter, prediction_year, high_threshold, medium_threshold, low_threshold)
+
+    _file_store["map_html"] = result.get("map_output")
+    _file_store["csv_data"] = result.get("csv_data")
+
+    return {"status": f"Analysis complete. Prediction for {prediction_quarter} {prediction_year}."}
+
+
+@tool
+def ingest_newdata_tool() -> str:
+    """
+    Ingests a new DMIS CSV file into PostgreSQL.
+    Automatically removes duplicate DMIR Numbers (within file and vs database).
+    Developer-facing only.
+
+    Rules
+    -----
+    - Always confirm file is attached before calling.
+    - Report back exactly how many records were inserted and how many were duplicates.
+    """
+    # Read file bytes from agent_executor — not from LLM input
+    file_bytes = _file_store["file_bytes"]
+    file_name = _file_store["file_name"]
+
+    if not file_bytes:
+        return "Please attach a DMIS CSV file first."
+
+    try:
+        df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
+    except UnicodeDecodeError:
+        df = pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
+
+    try:
+        input_quarter, input_year = _extract_period_from_df(df)
+    except ValueError as e:
+        return str(e)
+
+    return run_ingest_newdata(file_bytes, file_name or "uploaded.csv", input_quarter, input_year)
+
+
+# ── Prompt ────────────────────────────────────────────────────────────────────
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+You are a gas leak prediction assistant for SP Digital's Singapore pipe network. If they say a simple/intent question,
+reply appropriately like a polite human. However, if there is no intent and you suspect there is, politely ask them
+what they are meaning and predict what they say and write it down so that they can reply back promptly.
+You have one tool:
+  1. gasleakprediction    — predicts gas leak risk for a specified quarter and year (user-facing)
+
+─────────────────────────────────────────────
+WHEN TO USE TOOLS
+─────────────────────────────────────────────
+- Only call tools when the user explicitly requests analysis
+- For general questions, greetings, or explanations — respond conversationally without calling tools
+- If user asks "what can you do?" or "help" — explain capabilities without calling tools
+- If user mentions uploading a file or wants to analyze data — then start the tool workflow
+
+─────────────────────────────────────────────
+GAS LEAK PREDICTION TOOL WORKFLOW
+─────────────────────────────────────────────
+Step 1 — Ask which quarter and year they want to PREDICT (e.g. "Q1 2026"). Both are required before proceeding.
+Step 2 — Ask user to upload a 6-month DMIS CSV covering the historical period leading up to that quarter.
+          Quarters are: Q1=Jan–Mar, Q2=Apr–Jun, Q3=Jul–Sep, Q4=Oct–Dec.
+          Required data windows:
+            - Predicting Q1 YYYY → upload Jul–Dec of YYYY-1
+            - Predicting Q2 YYYY → upload Oct (YYYY-1) – Mar (YYYY)
+            - Predicting Q3 YYYY → upload Jan–Jun of YYYY
+            - Predicting Q4 YYYY → upload Apr–Sep of YYYY
+Step 2 — Ask user to upload a 6-month DMIS CSV covering the past 6 months from the CURRENT date.
+          For example, if it is currently April (Q2), request data from Q4 of last year and Q1 of this year.
+          The model always trains on the strictly most recent 6 months of data available based on today's date.
+Step 3 — Check the "Months found" in the attached file. If any of the expected past 6 months are missing, politely inform the user which expected months are missing and ask if they would like to proceed anyway (the model can still work with partial data).
+Step 4 — Ask for thresholds or offer defaults:
+    "Risk thresholds — defaults are High=3, Medium=2, Low=1.
+     Reply 'use defaults' to proceed."
+Step 5 — Confirm before calling: "May I proceed?"
+Step 6 — Only call the tool after explicit user confirmation (e.g., 'yes', 'proceed').
+Step 7 — Call tool with prediction_quarter, prediction_year, and thresholds. Return map and summary.
+
+─────────────────────────────────────────────
+RULES
+─────────────────────────────────────────────
+- Never call any tool without a file attached.
+- The prediction_quarter and prediction_year passed to the tool must be EXACTLY what the user specified — do not derive them from the CSV.
+- The model predicts risk for the quarter the user named — always make this clear.
+- Retraining is handled by developers only — do not mention it to users.
+- Only answer questions about gas leak risk analysis.
+- For all other queries, respond as a helpful assistant without using tools.
+"""),
+    MessagesPlaceholder(variable_name="chat_history"),
+    ("human", "{input}"),
+    ("placeholder", "{agent_scratchpad}"),
+])
+
+# ── Conversational Chain ──────────────────────────────────────────────────────
+
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+
+# Simple conversational chain that can mention tools but doesn't force tool usage
+conversational_prompt = PromptTemplate.from_template("""
+You are a gas leak prediction assistant for SP Digital's Singapore pipe network. 
+
+CAPABILITIES:
+- Predict gas leak risk for the selected quarter and year across Singapore's hex grid
+
+HOW TO USE:
+For risk analysis: Tell me which quarter and year you want to predict, then upload a recent 6-month DMIS CSV covering the historical period before that quarter.
+For risk analysis: Tell me which quarter and year you want to predict, then upload a recent 6-month DMIS CSV covering the past 6 months from today's date.
+
+RULES:
+- Always be helpful and informative
+- Only perform actions when explicitly requested. Do not execute without proper intent.
+- Users cannot predict past quarters. Reject past quarters and ask for current/future ones.
+- If uploaded data is missing months, tell them exactly: "Great, I have checked the data..." list the found/missing months, and ask "do you still want to continue? the model can work still".
+- Explain what you can do when asked
+- Don't force tool usage - wait for user requests
+- If do not know what they are saying, predict what they are saying and write it politely and ask do you mean this. 
+                                                     
+
+Current conversation:
+{chat_history}
+
+User: {input}
+
+Assistant:""")
+
+llm_chain = LLMChain(llm=llm, prompt=conversational_prompt)
+
+
+def _build_chat_history(messages: list) -> list:
+    history = []
+    for msg in messages[:-1]:
+        if msg["role"] == "user":
+            history.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "assistant":
+            history.append(AIMessage(content=msg["content"]))
+    return history
+
+
+def run_agent(messages: list, file_bytes: bytes = None, file_name: str = None) -> ChatResponse:
+    try:
+        # Create agent executor
+        tools = [gasleakprediction_tool]
+        agent = create_tool_calling_agent(llm, tools, prompt)
+        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
         
-    if len(low_risk_ids) == 0:
-        print("No low-risk IDs found — skipping low-risk layer")
-        gdf_low_risk = gdf.iloc[0:0]
-    else:
-        gdf_low_risk = gdf[gdf["hexagonID"].astype(str).isin(low_risk_ids)]
+        last_message = messages[-1]["content"] if messages else ""
 
-    if len(minimal_risk_ids) == 0:
-        print("No minimal-risk IDs found — skipping minimal-risk layer")
-        gdf_minimal_risk = gdf.iloc[0:0]
-    else:
-        gdf_minimal_risk = gdf[gdf["hexagonID"].astype(str).isin(minimal_risk_ids)]
+        # If a new file is uploaded, update the in-memory store.
+        # This allows the file to persist across requests within a single user session
+        # on a single worker process.
+        if file_bytes and file_name:
+            _file_store["file_bytes"] = file_bytes
+            _file_store["file_name"] = file_name
+            
+            try:
+                try:
+                    df_temp = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
+                except UnicodeDecodeError:
+                    df_temp = pd.read_csv(io.BytesIO(file_bytes), encoding="latin-1")
+                iquarter, iyear = _extract_period_from_df(df_temp)
+                _file_store["detected_period"] = f"{iquarter} {iyear}"
+                _file_store["detected_months"] = _extract_months_from_df(df_temp)
+            except Exception:
+                _file_store["detected_period"] = "Unknown"
+                _file_store["detected_months"] = "Unknown"
+        
+        # Reset map and csv stores for this new run
+        _file_store["map_html"] = None
+        _file_store["csv_data"] = None
 
-    # Create map
-    m = folium.Map(location=[1.3521, 103.8198], zoom_start=12, tiles=None)
-    folium.TileLayer("https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png",     attr='Map data © contributors, OneMapSG',
-        name="OneMapSG",).add_to(m)
+        if _file_store.get("file_bytes") and _file_store.get("file_name"):
+            actual_period = _file_store.get("detected_period", "Unknown")
+            detected_months = _file_store.get("detected_months", "Unknown")
+            input_text = f"{last_message}\n\n[File attached: {_file_store['file_name']}, size: {len(_file_store['file_bytes']):,} bytes, Actual data period: {actual_period}, Months found: {detected_months}]"
+        else:
+            input_text = last_message
 
-    fg_main = folium.FeatureGroup(name="Hexagon ID", show=True)
-    folium.GeoJson(
-        gdf,
-        name="Hexagon ID",
-        style_function=lambda feature: {
-        'fillColor': "#ffffff00",     # interior color
-            'color': "#7f7f7f",         # outline color
-            'weight': 0.5,                # outline thickness
-            'fillOpacity': 0.2,         # transparency (0–1)
-        },
-        highlight_function=lambda feature: {
-            'fillColor': '#ff6666',
-            'color': '#000000',
-            'weight': 2,
-            'fillOpacity': 0.7
-        },
-        tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
-    ).add_to(fg_main)
-    fg_main.add_to(m)
+        result = agent_executor.invoke({
+            "input": input_text,
+            "chat_history": _build_chat_history(messages),
+        })
 
-    fg_mapsheet = folium.FeatureGroup(name="Mapsheet", show=False)
-    folium.GeoJson(
-        mapsheet,
-        name="Mapsheet",
-        style_function=lambda feature: {
-            'fillColor': "#ffffff00",     # interior color
-            'color': "#7f7f7f",         # outline color
-            'weight': 0.5,                # outline thickness
-            'fillOpacity': 0.0,         # transparency (0–1)
-        },
-        highlight_function=lambda feature: {
-            'fillColor': '#ff6666',
-            'color': '#000000',
-            'weight': 3,
-            'fillOpacity': 0.7
-        },
-        tooltip=folium.GeoJsonTooltip(fields=["SI_NAME"], aliases=["Mapsheet ID"])
-    ).add_to(fg_mapsheet)
-    fg_mapsheet.add_to(m)
+        output = result["output"]
+        map_html = _file_store.get("map_html")
+        csv_data = _file_store.get("csv_data")
 
-    fg_high_risk = folium.FeatureGroup(name="High Risk", show=True)
-    if not gdf_high_risk.empty:
-        folium.GeoJson(
-            gdf_high_risk,
-            name="High Risk",
-            style_function=lambda feature: {
-                'fillColor': "#ff0000",        # red
-                'color': "#00023C",
-                'weight': 1,
-                'fillOpacity': 0.5,
-            },
-            highlight_function=lambda feature: {
-                'fillColor': '#ff6666',
-                'color': '#000000',
-                'weight': 3,
-                'fillOpacity': 0.7
-            },
-            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
-        ).add_to(fg_high_risk)
-    fg_high_risk.add_to(m)
+        if map_html or csv_data:
+            return ChatResponse(
+                message=str(output),
+                map_html=map_html,
+                csv_data=csv_data,
+            )
 
-    fg_medium_risk = folium.FeatureGroup(name="Medium Risk", show=True)
-    if not gdf_medium_risk.empty:
-        folium.GeoJson(
-            gdf_medium_risk,
-            name="Medium Risk",
-            style_function=lambda feature: {
-                'fillColor': "#ff7700da",
-                'color': "#000000",
-                'weight': 1,
-                'fillOpacity': 0.5,
-            },
-            highlight_function=lambda feature: {
-                'fillColor': '#ff6666',
-                'color': '#000000',
-                'weight': 3,
-                'fillOpacity': 0.7
-            },
-            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
-        ).add_to(fg_medium_risk)
-    fg_medium_risk.add_to(m)
+        if "please attach" in str(output).lower():
+            return ChatResponse(message=output, requires_file=True)
 
-    fg_low_risk = folium.FeatureGroup(name="Low Risk", show=True)
-    if not gdf_low_risk.empty:
-        folium.GeoJson(
-            gdf_low_risk,
-            name="Low Risk",
-            style_function=lambda feature: {
-                'fillColor': "#d3c52cff",
-                'color': "#000000",
-                'weight': 1,
-                'fillOpacity': 0.5,
-            },
-            highlight_function=lambda feature: {
-                'fillColor': '#ff6666',
-                'color': '#000000',
-                'weight': 3,
-                'fillOpacity': 0.7
-            },
-            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
-        ).add_to(fg_low_risk)
-    fg_low_risk.add_to(m)
+        return ChatResponse(message=str(output))
 
-    fg_minimal_risk = folium.FeatureGroup(name="Minimal Risk", show=False)
-    if not gdf_minimal_risk.empty:
-        folium.GeoJson(
-            gdf_minimal_risk,
-            name="Minimal Risk",
-            style_function=lambda feature: {
-                'fillColor': "#00ff00aa",
-                'color': "#000000",
-                'weight': 1,
-                'fillOpacity': 0.5,
-            },
-            highlight_function=lambda feature: {
-                'fillColor': '#ff6666',
-                'color': '#000000',
-                'weight': 3,
-                'fillOpacity': 0.7
-            },
-            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
-        ).add_to(fg_minimal_risk)
-    fg_minimal_risk.add_to(m)
-
-    legend_html = '''
-    <div style="
-        position: fixed; 
-        bottom: 30px; left: 30px; width: 180px; height: 140px; 
-        background-color: white; 
-        border:2px solid grey; 
-        z-index:9999; 
-        font-size:14px;
-        padding: 10px;
-        box-shadow: 3px 3px 5px rgba(0,0,0,0.3);
-    ">
-    <b>Legend</b><br>
-    <i style="background:#ff0000;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> High Risk<br>
-    <i style="background:#ff7700da;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> Medium Risk<br>
-    <i style="background:#d3c52cff;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> Low Risk<br>
-    <i style="background:#00ff00aa;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> Minimal Risk<br>
-    </div>
-    '''
-
-    m.get_root().html.add_child(folium.Element(legend_html))
-
-    folium.LayerControl().add_to(m)
-
-    buf = io.BytesIO()
-    m.save(buf, close_file=False)
-    return buf.getvalue().decode("utf-8")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return ChatResponse(
+            message=f"Error: {str(e)}",
+            requires_file=False,
+        )
