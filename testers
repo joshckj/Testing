@@ -1,30 +1,41 @@
 """
 =============================================================================
-PREDICTION RANGE FINDER
+PREDICTION PERIOD FILTERER
 =============================================================================
-Determines the exact 6-month historical training window required to predict 
-a specified target quarter (Q1-Q4). Returns properly formatted start and 
-end dates for SQL and Pandas filtering.
+Aggregates pipe network features and filters historical gas leak data 
+into a precise 6-month prediction window. Calculates incident rates 
+and normalizes leaks per kilometer for each HexID region.
 =============================================================================
 """
 
-def find_prediction_period(prediction_quarter, prediction_year):
-    prediction_year = int(prediction_year)
+import numpy as np
+import pandas as pd
+from .pipe_network_hex_aggregator import aggregate_pipe_data
+from .prediction_range_finder import find_prediction_period
 
-    match prediction_quarter:
-        case "Q1":
-            start_date = f"{prediction_year - 1}-07-01"
-            end_date   = f"{prediction_year}-01-01"
-        case "Q2":
-            start_date = f"{prediction_year - 1}-10-01"
-            end_date   = f"{prediction_year}-04-01"
-        case "Q3":
-            start_date = f"{prediction_year}-01-01"
-            end_date   = f"{prediction_year}-07-01"
-        case "Q4":
-            start_date = f"{prediction_year}-04-01"
-            end_date   = f"{prediction_year}-10-01"
-        case _:
-            raise ValueError(f"Invalid quarter '{prediction_quarter}'. Must be Q1, Q2, Q3, or Q4.")
+def filter_prediction_period(gas_leak_df, pipe_data_df, prediction_quarter, prediction_year):
 
-    return start_date, end_date
+    #Aggregate pipes into Hex IDs, finding average of parameters within each Hex ID
+    pipe_agg = aggregate_pipe_data(pipe_data_df=pipe_data_df)
+
+    print("**Filtering by period**")
+
+    start_date, end_date = find_prediction_period(prediction_quarter, prediction_year)
+    print(f"Start Date: {start_date}")
+    print(f"End date: {end_date}")
+
+    date_mask = (gas_leak_df["Call end time"] >= start_date) & (gas_leak_df["Call end time"] < end_date)
+    gas_hex_train_df = gas_leak_df.loc[date_mask]
+
+    gas_agg_train = gas_hex_train_df.groupby('HexID').size().reset_index(name='num_incidents')
+
+    hex_region_train_df = pd.merge(pipe_agg, gas_agg_train, on='HexID', how='left')
+    hex_region_train_df['num_incidents'] = hex_region_train_df['num_incidents'].fillna(0).astype(int)
+
+    hex_region_train_df['incident_rate'] = hex_region_train_df['num_incidents'] / hex_region_train_df['num_pipes']
+
+    hex_region_train_df['Leaks per km'] = hex_region_train_df.apply(
+    lambda x: x['num_incidents'] / (x['pipe_length'] / 1000) if x['pipe_length'] > 0 else 0,
+    axis=1)
+
+    return hex_region_train_df, None
