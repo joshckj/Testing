@@ -1,0 +1,227 @@
+"""
+=============================================================================
+FOLIUM HEX MAP VISUALISATION
+=============================================================================
+Generates an interactive Folium map visualization using GeoPandas. 
+Overlays Singapore's map with hexagonal grids color-coded by predicted 
+gas leak risk levels (High, Medium, Low, Minimal).
+=============================================================================
+"""
+import io
+import pathlib
+import geopandas as gpd
+import folium
+import pandas as pd
+
+_ASSETS = pathlib.Path(__file__).parent.parent / "assets"
+
+def create_hex_map_visualization(prediction_results_df, prediction_quarter, prediction_year):
+    """
+    Creates a Folium Hex Map Visualization based on prediction results
+    """
+
+    # Load shapefile
+    gdf = gpd.read_file(_ASSETS / "hexagon_data" / "Singapore_hexagon.shp")
+
+    # Convert CRS if needed
+    if gdf.crs and gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+
+    # Fix datetime fields
+    for col in gdf.columns:
+        if pd.api.types.is_datetime64_any_dtype(gdf[col]):
+            gdf[col] = gdf[col].astype(str)
+
+    mapsheet = gpd.read_file(_ASSETS / "mapsheet_data" / "Mapsheet.shp")
+    if mapsheet.crs and mapsheet.crs.to_epsg() != 4326:
+        mapsheet = mapsheet.to_crs(epsg=4326)
+    
+    for col in mapsheet.columns:
+        if pd.api.types.is_datetime64_any_dtype(mapsheet[col]):
+            mapsheet[col] = mapsheet[col].astype(str)
+
+    prediction_results_df.rename(columns={"HexID": "hexagonID"}, inplace=True)
+    high_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "High", "hexagonID"].astype(str).unique()
+    medium_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "Medium", "hexagonID"].astype(str).unique()
+    low_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "Low", "hexagonID"].astype(str).unique()
+    minimal_risk_ids = prediction_results_df.loc[prediction_results_df["risk_level_classified"] == "Minimal", "hexagonID"].astype(str).unique()
+
+    if len(high_risk_ids) == 0:
+        print("No high-risk IDs found — skipping high-risk layer")
+        gdf_high_risk = gdf.iloc[0:0]  # empty GeoDataFrame with same structure
+    else:
+        gdf_high_risk = gdf[gdf["hexagonID"].astype(str).isin(high_risk_ids)]
+
+    if len(medium_risk_ids) == 0:
+        print("No medium-risk IDs found — skipping medium-risk layer")
+        gdf_medium_risk = gdf.iloc[0:0]
+    else:
+        gdf_medium_risk = gdf[gdf["hexagonID"].astype(str).isin(medium_risk_ids)]
+        
+    if len(low_risk_ids) == 0:
+        print("No low-risk IDs found — skipping low-risk layer")
+        gdf_low_risk = gdf.iloc[0:0]
+    else:
+        gdf_low_risk = gdf[gdf["hexagonID"].astype(str).isin(low_risk_ids)]
+
+    if len(minimal_risk_ids) == 0:
+        print("No minimal-risk IDs found — skipping minimal-risk layer")
+        gdf_minimal_risk = gdf.iloc[0:0]
+    else:
+        gdf_minimal_risk = gdf[gdf["hexagonID"].astype(str).isin(minimal_risk_ids)]
+
+    # Create map
+    m = folium.Map(location=[1.3521, 103.8198], zoom_start=12, tiles=None)
+    folium.TileLayer("https://www.onemap.gov.sg/maps/tiles/Default/{z}/{x}/{y}.png",     attr='Map data © contributors, OneMapSG',
+        name="OneMapSG",).add_to(m)
+
+    fg_main = folium.FeatureGroup(name="Hexagon ID", show=True)
+    folium.GeoJson(
+        gdf,
+        name="Hexagon ID",
+        style_function=lambda feature: {
+        'fillColor': "#ffffff00",     # interior color
+            'color': "#7f7f7f",         # outline color
+            'weight': 0.5,                # outline thickness
+            'fillOpacity': 0.2,         # transparency (0–1)
+        },
+        highlight_function=lambda feature: {
+            'fillColor': '#ff6666',
+            'color': '#000000',
+            'weight': 2,
+            'fillOpacity': 0.7
+        },
+        tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
+    ).add_to(fg_main)
+    fg_main.add_to(m)
+
+    fg_mapsheet = folium.FeatureGroup(name="Mapsheet", show=False)
+    folium.GeoJson(
+        mapsheet,
+        name="Mapsheet",
+        style_function=lambda feature: {
+            'fillColor': "#ffffff00",     # interior color
+            'color': "#7f7f7f",         # outline color
+            'weight': 0.5,                # outline thickness
+            'fillOpacity': 0.0,         # transparency (0–1)
+        },
+        highlight_function=lambda feature: {
+            'fillColor': '#ff6666',
+            'color': '#000000',
+            'weight': 3,
+            'fillOpacity': 0.7
+        },
+        tooltip=folium.GeoJsonTooltip(fields=["SI_NAME"], aliases=["Mapsheet ID"])
+    ).add_to(fg_mapsheet)
+    fg_mapsheet.add_to(m)
+
+    fg_high_risk = folium.FeatureGroup(name="High Risk", show=True)
+    if not gdf_high_risk.empty:
+        folium.GeoJson(
+            gdf_high_risk,
+            name="High Risk",
+            style_function=lambda feature: {
+                'fillColor': "#ff0000",        # red
+                'color': "#00023C",
+                'weight': 1,
+                'fillOpacity': 0.5,
+            },
+            highlight_function=lambda feature: {
+                'fillColor': '#ff6666',
+                'color': '#000000',
+                'weight': 3,
+                'fillOpacity': 0.7
+            },
+            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
+        ).add_to(fg_high_risk)
+    fg_high_risk.add_to(m)
+
+    fg_medium_risk = folium.FeatureGroup(name="Medium Risk", show=True)
+    if not gdf_medium_risk.empty:
+        folium.GeoJson(
+            gdf_medium_risk,
+            name="Medium Risk",
+            style_function=lambda feature: {
+                'fillColor': "#ff7700da",
+                'color': "#000000",
+                'weight': 1,
+                'fillOpacity': 0.5,
+            },
+            highlight_function=lambda feature: {
+                'fillColor': '#ff6666',
+                'color': '#000000',
+                'weight': 3,
+                'fillOpacity': 0.7
+            },
+            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
+        ).add_to(fg_medium_risk)
+    fg_medium_risk.add_to(m)
+
+    fg_low_risk = folium.FeatureGroup(name="Low Risk", show=True)
+    if not gdf_low_risk.empty:
+        folium.GeoJson(
+            gdf_low_risk,
+            name="Low Risk",
+            style_function=lambda feature: {
+                'fillColor': "#d3c52cff",
+                'color': "#000000",
+                'weight': 1,
+                'fillOpacity': 0.5,
+            },
+            highlight_function=lambda feature: {
+                'fillColor': '#ff6666',
+                'color': '#000000',
+                'weight': 3,
+                'fillOpacity': 0.7
+            },
+            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
+        ).add_to(fg_low_risk)
+    fg_low_risk.add_to(m)
+
+    fg_minimal_risk = folium.FeatureGroup(name="Minimal Risk", show=False)
+    if not gdf_minimal_risk.empty:
+        folium.GeoJson(
+            gdf_minimal_risk,
+            name="Minimal Risk",
+            style_function=lambda feature: {
+                'fillColor': "#00ff00aa",
+                'color': "#000000",
+                'weight': 1,
+                'fillOpacity': 0.5,
+            },
+            highlight_function=lambda feature: {
+                'fillColor': '#ff6666',
+                'color': '#000000',
+                'weight': 3,
+                'fillOpacity': 0.7
+            },
+            tooltip=folium.GeoJsonTooltip(fields=["hexagonID"])
+        ).add_to(fg_minimal_risk)
+    fg_minimal_risk.add_to(m)
+
+    legend_html = '''
+    <div style="
+        position: fixed; 
+        bottom: 30px; left: 30px; width: 180px; height: 140px; 
+        background-color: white; 
+        border:2px solid grey; 
+        z-index:9999; 
+        font-size:14px;
+        padding: 10px;
+        box-shadow: 3px 3px 5px rgba(0,0,0,0.3);
+    ">
+    <b>Legend</b><br>
+    <i style="background:#ff0000;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> High Risk<br>
+    <i style="background:#ff7700da;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> Medium Risk<br>
+    <i style="background:#d3c52cff;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> Low Risk<br>
+    <i style="background:#00ff00aa;width:18px;height:18px;float:left;margin-right:8px;opacity:0.7"></i> Minimal Risk<br>
+    </div>
+    '''
+
+    m.get_root().html.add_child(folium.Element(legend_html))
+
+    folium.LayerControl().add_to(m)
+
+    buf = io.BytesIO()
+    m.save(buf, close_file=False)
+    return buf.getvalue().decode("utf-8")
